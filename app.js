@@ -41,6 +41,111 @@
     return books.filter(book => (filter === 'all' || book.state === filter) && (`${book.title} ${book.author}`.toLowerCase().includes(term)));
   }
 
+  const CATALOG_ENDPOINT = 'https://openlibrary.org/search.json';
+  const CATALOG_FIELDS = 'key,title,author_name,cover_i,first_publish_year';
+
+  function buildCatalogSearchUrl(query) {
+    const params = new URLSearchParams({ q: String(query || '').trim(), limit: '20', fields: CATALOG_FIELDS });
+    return `${CATALOG_ENDPOINT}?${params.toString()}`;
+  }
+
+  function normalizeCatalogDocs(docs) {
+    if (!Array.isArray(docs)) return [];
+    return docs.flatMap(doc => {
+      if (!doc || typeof doc.key !== 'string' || !doc.key.trim() || typeof doc.title !== 'string' || !doc.title.trim()) return [];
+      const key = doc.key.trim();
+      const author = Array.isArray(doc.author_name) && typeof doc.author_name[0] === 'string' && doc.author_name[0].trim() ? doc.author_name[0].trim() : 'Unknown author';
+      return [{ id: `ol:${key}`, key, title: doc.title.trim(), author, coverId: Number.isInteger(doc.cover_i) && doc.cover_i > 0 ? doc.cover_i : null, year: Number.isInteger(doc.first_publish_year) && doc.first_publish_year > 0 ? doc.first_publish_year : null, source: 'catalog' }];
+    });
+  }
+
+  function workFingerprint(book) {
+    return `${String(book.title || '').trim().toLowerCase()}\u0000${String(book.author || '').trim().toLowerCase()}`;
+  }
+
+  function mergeSearchResults(local, remote) {
+    const merged = [];
+    const seen = new Set();
+    [...(Array.isArray(local) ? local : []), ...(Array.isArray(remote) ? remote : [])].forEach(book => {
+      const fingerprint = workFingerprint(book);
+      if (seen.has(fingerprint)) return;
+      seen.add(fingerprint);
+      merged.push(book);
+    });
+    return merged;
+  }
+
+  const shelfLabel = { current: 'Currently Reading', want: 'Want to Read', finished: 'Finished', dnf: 'Did Not Finish' };
+
+  function getSearchPresentation(options) {
+    const query = String(options.query || '').trim();
+    const filter = options.filter || 'all';
+    const localResults = Array.isArray(options.localResults) ? options.localResults : [];
+    const catalogResults = Array.isArray(options.catalogResults) ? options.catalogResults : [];
+    const catalogStatus = options.catalogStatus || 'idle';
+    const searching = query.length >= 2;
+    const catalogEnabled = searching && filter === 'all';
+    const results = catalogEnabled ? mergeSearchResults(localResults, catalogResults) : localResults;
+    const localNoun = localResults.length === 1 ? 'local match' : 'local matches';
+    let countText;
+    let statusText = '';
+    if (!searching) countText = `${results.length} ${results.length === 1 ? 'book' : 'books'} · preview collection`;
+    else if (!catalogEnabled) {
+      countText = `${localResults.length} ${localNoun} · ${shelfLabel[filter] || 'Selected'} shelf only`;
+      statusText = 'Open Library search is available only in All books.';
+    } else if (catalogStatus === 'loading') {
+      countText = `${localResults.length} ${localNoun} · searching Open Library…`;
+      statusText = `Searching the Open Library catalog for “${query}”…`;
+    } else if (catalogStatus === 'error') {
+      countText = `${localResults.length} ${localNoun} only`;
+      statusText = options.offline ? 'You appear to be offline. Showing matching books from your library.' : 'Catalog search is unavailable. Showing matching books from your library.';
+    } else {
+      countText = `${results.length} ${results.length === 1 ? 'result' : 'results'} · your library first, then Open Library`;
+      if (catalogStatus === 'success' && results.length === 0) statusText = `No library or Open Library results found for “${query}”.`;
+    }
+    return { results, countText, statusText, emptyVisible: results.length === 0 && catalogStatus !== 'loading' };
+  }
+
+  function createCatalogSearchController(options) {
+    const settings = options || {};
+    const fetchImpl = settings.fetchImpl || root.fetch.bind(root);
+    const AbortControllerImpl = settings.AbortControllerImpl || root.AbortController;
+    const setTimer = settings.setTimer || root.setTimeout.bind(root);
+    const clearTimer = settings.clearTimer || root.clearTimeout.bind(root);
+    let timer = null;
+    let controller = null;
+    let sequence = 0;
+    function cancel() {
+      sequence += 1;
+      if (timer !== null) clearTimer(timer);
+      timer = null;
+      if (controller) controller.abort();
+      controller = null;
+    }
+    function search(query, notify) {
+      cancel();
+      const term = String(query || '').trim();
+      if (term.length < 2) return;
+      const requestSequence = sequence;
+      timer = setTimer(async () => {
+        timer = null;
+        controller = new AbortControllerImpl();
+        notify({ status: 'loading', query: term });
+        try {
+          const response = await fetchImpl(buildCatalogSearchUrl(term), { signal: controller.signal, headers: { Accept: 'application/json' } });
+          if (!response.ok) throw new Error(`Open Library returned ${response.status}`);
+          const body = await response.json();
+          if (requestSequence !== sequence) return;
+          notify({ status: 'success', query: term, results: normalizeCatalogDocs(body && body.docs) });
+        } catch (error) {
+          if (requestSequence !== sequence || (error && error.name === 'AbortError')) return;
+          notify({ status: 'error', query: term, error });
+        }
+      }, 300);
+    }
+    return { search, cancel };
+  }
+
   function setBookState(state, id, readingState) {
     const next = JSON.parse(JSON.stringify(state));
     if (next.books[id] && ['current', 'want', 'finished', 'dnf'].includes(readingState)) {
@@ -68,7 +173,7 @@
     return next;
   }
 
-  const api = { BOOKS, createState, filterBooks, setBookState, setBookProgress, setFeedPreference, togglePreference };
+  const api = { BOOKS, createState, filterBooks, buildCatalogSearchUrl, normalizeCatalogDocs, mergeSearchResults, getSearchPresentation, createCatalogSearchController, setBookState, setBookProgress, setFeedPreference, togglePreference };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   if (!root.document) return;
 
@@ -76,6 +181,8 @@
   try { state = createState(JSON.parse(root.localStorage.getItem(STORAGE_KEY) || 'null')); } catch (_) { state = createState(); }
   let activeBookId = null;
   let toastTimer;
+  let catalogResults = [];
+  let catalogStatus = 'idle';
   const doc = root.document;
   const $ = selector => doc.querySelector(selector);
   const $$ = selector => Array.from(doc.querySelectorAll(selector));
@@ -93,13 +200,16 @@
     toastTimer = root.setTimeout(() => toast.classList.remove('show'), 2200);
   }
 
-  function coverUrl(book, size) { return `https://covers.openlibrary.org/b/isbn/${book.isbn}-${size || 'M'}.jpg`; }
+  function coverUrl(book, size) {
+    if (book.coverId) return `https://covers.openlibrary.org/b/id/${book.coverId}-${size || 'M'}.jpg`;
+    return `https://covers.openlibrary.org/b/isbn/${book.isbn}-${size || 'M'}.jpg`;
+  }
 
   function hydrateBook(book) { return Object.assign({}, book, state.books[book.id]); }
 
   function createBookCard(book) {
     const article = doc.createElement('article');
-    article.className = 'book-card';
+    article.className = `book-card${book.source === 'catalog' ? ' catalog-card' : ''}`;
     article.dataset.bookId = book.id;
     const button = doc.createElement('button');
     button.className = 'book-cover';
@@ -111,12 +221,18 @@
     img.loading = 'lazy';
     img.addEventListener('error', () => { img.src = `https://placehold.co/320x480/53604f/f5f0e7?text=${encodeURIComponent(book.title)}`; }, { once: true });
     const chip = doc.createElement('span');
-    chip.className = 'status-chip';
-    chip.textContent = stateLabel[book.state];
+    chip.className = `status-chip${book.source === 'catalog' ? ' catalog-chip' : ''}`;
+    chip.textContent = book.source === 'catalog' ? 'Open Library catalog' : stateLabel[book.state];
     button.append(img, chip);
     const title = doc.createElement('h3'); title.textContent = book.title;
     const author = doc.createElement('p'); author.textContent = book.author;
     article.append(button, title, author);
+    if (book.source === 'catalog') {
+      const meta = doc.createElement('p');
+      meta.className = 'catalog-meta';
+      meta.textContent = book.year ? `First published ${book.year} · Not on your shelf` : 'Catalog result · Not on your shelf';
+      article.append(meta);
+    }
     return article;
   }
 
@@ -126,10 +242,13 @@
     row.replaceChildren(...hydrated.filter(book => book.state === 'want').slice(0, 4).map(createBookCard));
     $('#discoverGrid').replaceChildren(...hydrated.slice(1, 6).map(createBookCard));
     const query = $('#searchInput').value;
-    const results = filterBooks(hydrated, query, state.filter);
+    const localResults = filterBooks(hydrated, query, state.filter);
+    const presentation = getSearchPresentation({ query, filter: state.filter, localResults, catalogResults, catalogStatus, offline: root.navigator && root.navigator.onLine === false });
+    const results = presentation.results;
     $('#libraryGrid').replaceChildren(...results.map(createBookCard));
-    $('#resultCount').textContent = `${results.length} ${results.length === 1 ? 'book' : 'books'} · preview collection`;
-    $('#emptyState').hidden = results.length !== 0;
+    $('#resultCount').textContent = presentation.countText;
+    $('#searchStatus').textContent = presentation.statusText;
+    $('#emptyState').hidden = !presentation.emptyVisible;
   }
 
   function setView(view) {
@@ -180,19 +299,24 @@
   }
 
   function openBook(id) {
-    const book = BOOKS.find(item => item.id === id);
+    const book = BOOKS.find(item => item.id === id) || catalogResults.find(item => item.id === id);
     if (!book) return;
-    const item = hydrateBook(book);
+    const remote = book.source === 'catalog';
+    const item = remote ? book : hydrateBook(book);
     activeBookId = id;
     $('#dialogTitle').textContent = item.title;
     $('#dialogAuthor').textContent = item.author;
-    $('#dialogDescription').textContent = item.description;
+    $('#dialogDescription').textContent = remote ? `${item.year ? `First published ${item.year}. ` : ''}This is a read-only result from the Open Library catalog and is not on your shelf.` : item.description;
     $('#dialogCover').src = coverUrl(item, 'L');
     $('#dialogCover').alt = `${item.title} by ${item.author} cover`;
-    $('#readingState').value = item.state;
-    $('#progressRange').value = item.progress;
-    $('#progressOutput').textContent = `${item.progress}%`;
-    $$('#ratingButtons button').forEach(button => button.classList.toggle('selected', Number(button.value) <= item.rating));
+    $('#dialogSource').textContent = remote ? 'BOOK DETAILS · OPEN LIBRARY CATALOG' : 'BOOK DETAILS · PREVIEW DATA';
+    $('#localBookControls').hidden = remote;
+    if (!remote) {
+      $('#readingState').value = item.state;
+      $('#progressRange').value = item.progress;
+      $('#progressOutput').textContent = `${item.progress}%`;
+      $$('#ratingButtons button').forEach(button => button.classList.toggle('selected', Number(button.value) <= item.rating));
+    }
     $('#bookDialog').showModal();
   }
 
@@ -217,9 +341,27 @@
     const list = event.target.closest('[data-save-list]');
     if (list) { state = togglePreference(state, 'lists', list.dataset.saveList); save(); renderPreferences(); showToast('Reading list preference saved on this device.'); }
   });
-  $$('.filter').forEach(button => button.addEventListener('click', () => { state.filter = button.dataset.filter; save(); renderFilters(); renderBooks(); }));
   function renderFilters() { $$('.filter').forEach(button => { const active = button.dataset.filter === state.filter; button.classList.toggle('active', active); button.setAttribute('aria-pressed', String(active)); }); }
-  $('#searchInput').addEventListener('input', () => { if (state.view !== 'library') setView('library'); renderBooks(); });
+  const catalogSearch = createCatalogSearchController();
+  $$('.filter').forEach(button => button.addEventListener('click', () => {
+    state.filter = button.dataset.filter;
+    if (state.filter !== 'all') catalogSearch.cancel();
+    save(); renderFilters(); renderBooks();
+  }));
+  $('#searchInput').addEventListener('input', event => {
+    if (state.view !== 'library') setView('library');
+    const query = event.target.value.trim();
+    catalogResults = [];
+    catalogStatus = query.length >= 2 && state.filter === 'all' ? 'loading' : 'idle';
+    renderBooks();
+    if (state.filter !== 'all') { catalogSearch.cancel(); return; }
+    catalogSearch.search(query, update => {
+      if (update.query !== $('#searchInput').value.trim()) return;
+      catalogStatus = update.status;
+      if (update.status === 'success') catalogResults = update.results;
+      renderBooks();
+    });
+  });
   $('#readingState').addEventListener('change', event => { setReadingState(activeBookId, event.target.value); const value = state.books[activeBookId].progress; $('#progressRange').value = value; $('#progressOutput').textContent = `${value}%`; showToast(`Moved to ${stateLabel[event.target.value]}.`); });
   $('#progressRange').addEventListener('input', event => { $('#progressOutput').textContent = `${event.target.value}%`; });
   $('#progressRange').addEventListener('change', event => { updateProgress(activeBookId, event.target.value); showToast('Progress updated.'); });

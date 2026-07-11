@@ -23,6 +23,6 @@ npm run check
 
 - People, activity, progress, ratings, and collections are clearly labeled demo/preview data.
 - Changes persist only in `localStorage` in the current browser; there are no accounts or backend.
-- Covers are loaded from Open Library with image fallbacks.
+- Covers and catalog search results are loaded from Open Library. Catalog search uses Open Library’s public Search API and requires a network connection; shelf-specific filters remain local-only. Cover images have fallbacks.
 - Shop links open Bookshop.org. They are disclosed affiliate links.
 - This repository contains GitHub Pages files (`CNAME` and mirrored `404.html`), but deployment is intentionally outside this implementation.
