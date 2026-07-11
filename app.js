@@ -43,9 +43,25 @@
 
   const CATALOG_ENDPOINT = 'https://openlibrary.org/search.json';
   const CATALOG_FIELDS = 'key,title,author_name,cover_i,first_publish_year';
+  const CATALOG_PAGE_SIZE = 20;
+  const MAX_SEARCH_PAGES = 5;
+  const DISCOVERY_SHELVES = [
+    { id: 'reader-favorites', title: 'Reader favorites', description: 'Frequently logged fiction works in Open Library.', query: 'subject:fiction', sort: 'readinglog' },
+    { id: 'literary-fiction', title: 'Literary fiction', description: 'A broad browse of literary fiction in Open Library.', query: 'subject:literary_fiction' },
+    { id: 'science-fiction', title: 'Science fiction', description: 'Speculative worlds and future-facing stories.', query: 'subject:science_fiction' },
+    { id: 'biography', title: 'Biography & memoir', description: 'Lives and first-person histories from the catalog.', query: 'subject:biography' }
+  ];
 
-  function buildCatalogSearchUrl(query) {
-    const params = new URLSearchParams({ q: String(query || '').trim(), limit: '20', fields: CATALOG_FIELDS });
+  function boundedPage(page) { return Math.max(1, Math.min(MAX_SEARCH_PAGES, Number.parseInt(page, 10) || 1)); }
+
+  function buildCatalogSearchUrl(query, page) {
+    const params = new URLSearchParams({ q: String(query || '').trim(), page: String(boundedPage(page)), limit: String(CATALOG_PAGE_SIZE), fields: CATALOG_FIELDS });
+    return `${CATALOG_ENDPOINT}?${params.toString()}`;
+  }
+
+  function buildDiscoveryUrl(shelf) {
+    const params = new URLSearchParams({ q: shelf.query, limit: '10', fields: CATALOG_FIELDS });
+    if (shelf.sort) params.set('sort', shelf.sort);
     return `${CATALOG_ENDPOINT}?${params.toString()}`;
   }
 
@@ -70,6 +86,21 @@
       const fingerprint = workFingerprint(book);
       if (seen.has(fingerprint)) return;
       seen.add(fingerprint);
+      merged.push(book);
+    });
+    return merged;
+  }
+
+  function mergeCatalogPages(existing, incoming) {
+    const merged = [];
+    const keys = new Set();
+    const fingerprints = new Set();
+    ;[...(Array.isArray(existing) ? existing : []), ...(Array.isArray(incoming) ? incoming : [])].forEach(book => {
+      const key = String(book && book.key || '');
+      const fingerprint = workFingerprint(book || {});
+      if ((key && keys.has(key)) || fingerprints.has(fingerprint)) return;
+      if (key) keys.add(key);
+      fingerprints.add(fingerprint);
       merged.push(book);
     });
     return merged;
@@ -115,35 +146,101 @@
     let timer = null;
     let controller = null;
     let sequence = 0;
-    function cancel() {
+    let activeQuery = '';
+    let activePage = 0;
+    let activeResults = [];
+    let activeTotal = 0;
+    let pendingLoadMore = null;
+    function cancelRequest() {
       sequence += 1;
       if (timer !== null) clearTimer(timer);
       timer = null;
       if (controller) controller.abort();
       controller = null;
+      pendingLoadMore = null;
     }
-    function search(query, notify) {
-      cancel();
-      const term = String(query || '').trim();
-      if (term.length < 2) return;
+    function cancel() {
+      cancelRequest();
+      activeQuery = '';
+      activePage = 0;
+      activeResults = [];
+      activeTotal = 0;
+    }
+    function requestPage(term, page, notify, debounce) {
+      cancelRequest();
       const requestSequence = sequence;
-      timer = setTimer(async () => {
+      const run = async () => {
         timer = null;
         controller = new AbortControllerImpl();
-        notify({ status: 'loading', query: term });
+        notify({ status: page === 1 ? 'loading' : 'loading-more', query: term, page, results: activeResults });
         try {
-          const response = await fetchImpl(buildCatalogSearchUrl(term), { signal: controller.signal, headers: { Accept: 'application/json' } });
+          const response = await fetchImpl(buildCatalogSearchUrl(term, page), { signal: controller.signal, headers: { Accept: 'application/json' } });
           if (!response.ok) throw new Error(`Open Library returned ${response.status}`);
           const body = await response.json();
           if (requestSequence !== sequence) return;
-          notify({ status: 'success', query: term, results: normalizeCatalogDocs(body && body.docs) });
+          activePage = page;
+          activeTotal = Number(body && (body.numFound ?? body.num_found)) || 0;
+          activeResults = mergeCatalogPages(page === 1 ? [] : activeResults, normalizeCatalogDocs(body && body.docs));
+          notify({ status: 'success', query: term, results: activeResults, page, total: activeTotal, hasMore: page < MAX_SEARCH_PAGES && activeResults.length < activeTotal });
         } catch (error) {
           if (requestSequence !== sequence || (error && error.name === 'AbortError')) return;
-          notify({ status: 'error', query: term, error });
+          notify({ status: page === 1 ? 'error' : 'more-error', query: term, error, page, results: activeResults, hasMore: page <= MAX_SEARCH_PAGES });
         }
-      }, 300);
+      };
+      if (debounce) {
+        timer = setTimer(run, 300);
+        return undefined;
+      }
+      return run();
     }
-    return { search, cancel };
+    function search(query, notify) {
+      const term = String(query || '').trim();
+      if (term.length < 2) { cancel(); activeQuery = ''; activePage = 0; activeResults = []; return; }
+      activeQuery = term;
+      activePage = 0;
+      activeResults = [];
+      activeTotal = 0;
+      return requestPage(term, 1, notify, true);
+    }
+    function loadMore(notify) {
+      if (pendingLoadMore) return pendingLoadMore;
+      if (!activeQuery || activePage >= MAX_SEARCH_PAGES || (activeTotal && activeResults.length >= activeTotal)) return Promise.resolve();
+      const request = requestPage(activeQuery, activePage + 1, notify, false);
+      const guardedRequest = request.finally(() => {
+        if (pendingLoadMore === guardedRequest) pendingLoadMore = null;
+      });
+      pendingLoadMore = guardedRequest;
+      return guardedRequest;
+    }
+    return { search, loadMore, cancel };
+  }
+
+  function createDiscoveryController(options) {
+    const settings = options || {};
+    const fetchImpl = settings.fetchImpl || root.fetch.bind(root);
+    const AbortControllerImpl = settings.AbortControllerImpl || root.AbortController;
+    let cache = null;
+    let controller = null;
+    let pending = null;
+    async function load() {
+      if (cache) return cache;
+      if (pending) return pending;
+      controller = new AbortControllerImpl();
+      pending = Promise.all(DISCOVERY_SHELVES.map(async shelf => {
+        try {
+          const response = await fetchImpl(buildDiscoveryUrl(shelf), { signal: controller.signal, headers: { Accept: 'application/json' } });
+          if (!response.ok) throw new Error(`Open Library returned ${response.status}`);
+          const body = await response.json();
+          return Object.assign({}, shelf, { status: 'success', books: normalizeCatalogDocs(body && body.docs) });
+        } catch (error) {
+          if (error && error.name === 'AbortError') throw error;
+          return Object.assign({}, shelf, { status: 'error', books: [], error });
+        }
+      })).then(results => { cache = results; pending = null; return results; }, error => { pending = null; throw error; });
+      return pending;
+    }
+    function cancel() { if (controller) controller.abort(); controller = null; pending = null; }
+    return { load, cancel };
   }
 
   function setBookState(state, id, readingState) {
@@ -173,7 +270,7 @@
     return next;
   }
 
-  const api = { BOOKS, createState, filterBooks, buildCatalogSearchUrl, normalizeCatalogDocs, mergeSearchResults, getSearchPresentation, createCatalogSearchController, setBookState, setBookProgress, setFeedPreference, togglePreference };
+  const api = { BOOKS, DISCOVERY_SHELVES, MAX_SEARCH_PAGES, createState, filterBooks, buildCatalogSearchUrl, buildDiscoveryUrl, normalizeCatalogDocs, mergeSearchResults, mergeCatalogPages, getSearchPresentation, createCatalogSearchController, createDiscoveryController, setBookState, setBookProgress, setFeedPreference, togglePreference };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   if (!root.document) return;
 
@@ -183,6 +280,8 @@
   let toastTimer;
   let catalogResults = [];
   let catalogStatus = 'idle';
+  let catalogHasMore = false;
+  let discoveryShelves = DISCOVERY_SHELVES.map(shelf => Object.assign({}, shelf, { status: 'loading', books: [] }));
   const doc = root.document;
   const $ = selector => doc.querySelector(selector);
   const $$ = selector => Array.from(doc.querySelectorAll(selector));
@@ -236,19 +335,65 @@
     return article;
   }
 
+  function renderDiscovery() {
+    const container = $('#discoveryShelves');
+    if (!container) return;
+    const sections = discoveryShelves.map(shelf => {
+      const section = doc.createElement('section');
+      section.className = 'discovery-shelf';
+      section.setAttribute('aria-labelledby', `shelf-${shelf.id}`);
+      const heading = doc.createElement('div');
+      heading.className = 'section-heading discovery-heading';
+      const copy = doc.createElement('div');
+      const title = doc.createElement('h2');
+      title.id = `shelf-${shelf.id}`;
+      title.textContent = shelf.title;
+      const description = doc.createElement('p');
+      description.textContent = shelf.description;
+      copy.append(title, description);
+      const source = doc.createElement('span');
+      source.className = 'source-label';
+      source.textContent = 'Open Library';
+      heading.append(copy, source);
+      section.append(heading);
+      if (shelf.status === 'loading') {
+        const loading = doc.createElement('p');
+        loading.className = 'shelf-message';
+        loading.setAttribute('role', 'status');
+        loading.textContent = `Loading ${shelf.title.toLowerCase()}…`;
+        section.append(loading);
+      } else if (shelf.status === 'error') {
+        const error = doc.createElement('p');
+        error.className = 'shelf-message';
+        error.textContent = 'This Open Library shelf is unavailable right now. Your local library is unchanged.';
+        section.append(error);
+      } else {
+        const row = doc.createElement('div');
+        row.className = 'book-row discovery-row';
+        row.replaceChildren(...shelf.books.map(createBookCard));
+        section.append(row);
+      }
+      return section;
+    });
+    container.replaceChildren(...sections);
+  }
+
   function renderBooks() {
     const hydrated = BOOKS.map(hydrateBook);
     const row = $('#wantRow');
     row.replaceChildren(...hydrated.filter(book => book.state === 'want').slice(0, 4).map(createBookCard));
-    $('#discoverGrid').replaceChildren(...hydrated.slice(1, 6).map(createBookCard));
     const query = $('#searchInput').value;
     const localResults = filterBooks(hydrated, query, state.filter);
     const presentation = getSearchPresentation({ query, filter: state.filter, localResults, catalogResults, catalogStatus, offline: root.navigator && root.navigator.onLine === false });
     const results = presentation.results;
     $('#libraryGrid').replaceChildren(...results.map(createBookCard));
     $('#resultCount').textContent = presentation.countText;
-    $('#searchStatus').textContent = presentation.statusText;
+    $('#searchStatus').textContent = catalogStatus === 'loading-more' ? 'Loading more Open Library results…' : catalogStatus === 'more-error' ? 'More results could not be loaded. You can try again.' : presentation.statusText;
     $('#emptyState').hidden = !presentation.emptyVisible;
+    const loadMore = $('#loadMoreCatalog');
+    loadMore.hidden = !(query.trim().length >= 2 && state.filter === 'all' && (catalogHasMore || catalogStatus === 'more-error'));
+    loadMore.disabled = catalogStatus === 'loading-more';
+    loadMore.textContent = catalogStatus === 'loading-more' ? 'Loading…' : 'Load more from Open Library';
   }
 
   function setView(view) {
@@ -261,6 +406,7 @@
       if (active) button.setAttribute('aria-current', 'page'); else button.removeAttribute('aria-current');
     });
     save();
+    if (view === 'discover') loadDiscovery();
     root.scrollTo({ top: 0, behavior: 'smooth' });
   }
 
@@ -298,8 +444,25 @@
     });
   }
 
+  const discoveryController = createDiscoveryController();
+  let discoveryStarted = false;
+  function loadDiscovery() {
+    if (discoveryStarted) return;
+    discoveryStarted = true;
+    renderDiscovery();
+    discoveryController.load().then(shelves => {
+      discoveryShelves = shelves;
+      renderDiscovery();
+    }).catch(error => {
+      if (error && error.name === 'AbortError') return;
+      discoveryShelves = DISCOVERY_SHELVES.map(shelf => Object.assign({}, shelf, { status: 'error', books: [] }));
+      renderDiscovery();
+    });
+  }
+
   function openBook(id) {
-    const book = BOOKS.find(item => item.id === id) || catalogResults.find(item => item.id === id);
+    const discovered = discoveryShelves.flatMap(shelf => shelf.books || []).find(item => item.id === id);
+    const book = BOOKS.find(item => item.id === id) || catalogResults.find(item => item.id === id) || discovered;
     if (!book) return;
     const remote = book.source === 'catalog';
     const item = remote ? book : hydrateBook(book);
@@ -352,13 +515,24 @@
     if (state.view !== 'library') setView('library');
     const query = event.target.value.trim();
     catalogResults = [];
+    catalogHasMore = false;
     catalogStatus = query.length >= 2 && state.filter === 'all' ? 'loading' : 'idle';
     renderBooks();
     if (state.filter !== 'all') { catalogSearch.cancel(); return; }
     catalogSearch.search(query, update => {
       if (update.query !== $('#searchInput').value.trim()) return;
       catalogStatus = update.status;
-      if (update.status === 'success') catalogResults = update.results;
+      if (update.results) catalogResults = update.results;
+      if (typeof update.hasMore === 'boolean') catalogHasMore = update.hasMore;
+      renderBooks();
+    });
+  });
+  $('#loadMoreCatalog').addEventListener('click', () => {
+    catalogSearch.loadMore(update => {
+      if (update.query !== $('#searchInput').value.trim()) return;
+      catalogStatus = update.status;
+      if (update.results) catalogResults = update.results;
+      if (typeof update.hasMore === 'boolean') catalogHasMore = update.hasMore;
       renderBooks();
     });
   });
@@ -373,7 +547,7 @@
   $('#closeSettings').addEventListener('click', () => toggleFeedSettings(false));
   $$('[data-feed-setting]').forEach(input => { input.checked = state.feed[input.dataset.feedSetting]; input.addEventListener('change', () => { state = setFeedPreference(state, input.dataset.feedSetting, input.checked); save(); renderFeed(); showToast('Feed preference saved.'); }); });
 
-  renderFilters(); renderBooks(); updateHero(); renderFeed(); renderPreferences(); setView(state.view);
+  renderFilters(); renderBooks(); renderDiscovery(); updateHero(); renderFeed(); renderPreferences(); setView(state.view);
   root.setView = setView;
   root.setReadingState = setReadingState;
   root.updateProgress = updateProgress;

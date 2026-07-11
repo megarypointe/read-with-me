@@ -11,7 +11,7 @@ test('first draft contains the core product surfaces', () => {
   for (const marker of [
     'Read With Me', 'For you', 'My library', 'Discover', 'Shop', 'Clubs',
     'Currently Reading', 'Want to Read', 'Did Not Finish', 'Preview',
-    'Buy on Bookshop.org', 'Customize feed', 'Book details'
+    'Search on Bookshop.org', 'Customize feed', 'Book details'
   ]) assert.match(html, new RegExp(marker, 'i'), `missing ${marker}`);
 });
 
@@ -29,8 +29,16 @@ test('site is accessible and honest about draft behavior', () => {
   assert.match(html, /<main[^>]+id="mainContent"/);
   assert.match(html, /aria-label="Primary navigation"/);
   assert.match(html, /demo data|preview data/i);
-  assert.match(html, /affiliate/i);
+  assert.match(html, /No affiliate ID is configured/i);
   assert.doesNotMatch(html, /href="#"/);
+});
+
+test('catalog copy names the reader-favorites shelf without recency claims', () => {
+  const js = read('app.js');
+  const readme = read('README.md');
+  assert.match(js, /title: 'Reader favorites'/);
+  assert.match(readme, /Reader favorites/);
+  assert.doesNotMatch(`${js}\n${readme}`, /New & notable|Recently published/i);
 });
 
 test('deployment files target the approved domain and support deep links', () => {
