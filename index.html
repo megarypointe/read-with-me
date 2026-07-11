@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="A quiet place for books, reading lives, and good company.">
+  <title>Read With Me — Your reading life, gathered</title>
+  <link rel="preconnect" href="https://covers.openlibrary.org">
+  <link rel="stylesheet" href="/styles.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#mainContent">Skip to content</a>
+  <aside class="sidebar">
+    <a class="brand" href="/" aria-label="Read With Me home"><span>Read</span> With Me</a>
+    <nav aria-label="Primary navigation">
+      <button class="nav-item active" data-view="home" aria-current="page"><span>⌂</span> For you</button>
+      <button class="nav-item" data-view="library"><span>▤</span> My library</button>
+      <button class="nav-item" data-view="discover"><span>✦</span> Discover</button>
+      <button class="nav-item" data-view="shop"><span>◈</span> Shop</button>
+      <button class="nav-item" data-view="clubs"><span>◎</span> Clubs</button>
+    </nav>
+    <div class="sidebar-note"><span class="eyebrow">FIRST DRAFT</span><p>A living preview made for readers. All activity shown is demo data.</p></div>
+    <div class="profile"><span class="avatar">AK</span><span><strong>Alex Kim</strong><small>12 books this year</small></span></div>
+  </aside>
+
+  <main id="mainContent" tabindex="-1">
+    <header class="topbar">
+      <button class="wordmark-mobile" data-view="home">Read With Me</button>
+      <label class="search"><span aria-hidden="true">⌕</span><span class="sr-only">Search books</span><input id="searchInput" type="search" placeholder="Search your books…"></label>
+      <button class="icon-button" id="settingsButton" aria-label="Customize feed" aria-controls="feedSettings" aria-expanded="false">☼</button>
+    </header>
+
+    <section class="view active" data-page="home">
+      <div class="welcome"><div><p class="eyebrow">SATURDAY READING</p><h1>Good afternoon, Alex.</h1><p>Here’s what’s happening in your corner of the reading world.</p></div><button class="text-button" id="customizeButton">Customize feed <span>→</span></button></div>
+      <article class="hero-card" data-book-id="north-woods">
+        <div class="hero-copy"><p class="eyebrow light">CURRENTLY READING</p><h2>North Woods</h2><p class="author">Daniel Mason</p><blockquote>“A house is a body. Its rooms are organs, its windows eyes.”</blockquote><div class="progress-meta"><span id="heroPage">Page 145 of 372</span><strong id="heroPercent">39%</strong></div><div class="progress"><i id="heroBar"></i></div><button class="pill light-button" data-progress="north-woods">Update progress</button></div>
+        <button class="cover-button" data-open-book="north-woods" aria-label="Open North Woods book details"><img src="https://covers.openlibrary.org/b/isbn/9780593597033-L.jpg" alt="North Woods by Daniel Mason cover" onerror="this.src='https://placehold.co/360x540/9d523f/f7efe1?text=North+Woods'"></button>
+      </article>
+      <div class="section-heading" data-feed-section="friends"><div><p class="eyebrow">FROM PEOPLE YOU FOLLOW</p><h2>In your reading circle</h2></div><button class="text-button" data-view="discover">Explore all <span>→</span></button></div>
+      <div class="feed-grid">
+        <article class="activity-card" data-feed-section="friends"><div class="person"><span class="avatar moss">JM</span><p><strong>Jamie M.</strong><small>finished a book · 2h</small></p></div><div class="activity-book"><img src="https://covers.openlibrary.org/b/isbn/9780385547345-M.jpg" alt="Tomorrow, and Tomorrow, and Tomorrow cover"><div><h3>Tomorrow, and Tomorrow,<br>and Tomorrow</h3><p>Gabrielle Zevin</p><div class="stars" aria-label="5 out of 5 stars">★★★★★</div></div></div><blockquote>“Big-hearted, imaginative, and impossible to put down.”</blockquote><button class="quiet-button" data-open-book="tomorrow">View book</button></article>
+        <article class="activity-card quote-card" data-feed-section="highlights"><p class="eyebrow">HIGHLIGHTED BY MAYA</p><blockquote>“The world is always ending somewhere. But somewhere else, it’s always beginning.”</blockquote><div class="quote-source"><img src="https://covers.openlibrary.org/b/isbn/9780593653166-S.jpg" alt="The Ministry of Time cover"><div><h3>The Ministry of Time</h3><p>Kaliane Bradley · page 211</p></div></div><button class="quiet-button" data-open-book="ministry">View book</button></article>
+      </div>
+      <section class="shelf-section" data-feed-section="shelf"><div class="section-heading"><div><p class="eyebrow">YOUR SHELF</p><h2>Want to Read</h2></div><button class="text-button" data-library-filter="want">See all <span>→</span></button></div><div class="book-row" id="wantRow"></div></section>
+    </section>
+
+    <section class="view" data-page="library">
+      <div class="page-intro"><p class="eyebrow">YOUR COLLECTION</p><h1>My library</h1><p>Every book has a place in your reading life.</p></div>
+      <div class="filter-bar" role="group" aria-label="Filter library"><button class="filter active" data-filter="all" aria-pressed="true">All books</button><button class="filter" data-filter="current">Currently Reading</button><button class="filter" data-filter="want">Want to Read</button><button class="filter" data-filter="finished">Finished</button><button class="filter" data-filter="dnf">Did Not Finish</button></div>
+      <p id="resultCount" class="result-count" aria-live="polite"></p><div class="library-grid" id="libraryGrid"></div><p class="empty" id="emptyState" hidden>No books found. Try a different search or shelf.</p>
+    </section>
+
+    <section class="view" data-page="discover"><div class="page-intro"><p class="eyebrow">CURATED FOR CURIOUS MINDS</p><h1>Discover something lasting.</h1><p>Editor-selected reading paths, unusual pairings, and books worth talking about.</p></div><div class="feature-strip"><div><p class="eyebrow light">THIS WEEK’S EDIT</p><h2>Books that rearrange<br>the furniture in your mind</h2><p>Five singular novels about memory, place, and who we become.</p></div><button class="pill light-button" data-library-filter="all">Explore the edit</button></div><div class="section-heading"><h2>Popular with your circle</h2></div><div class="library-grid" id="discoverGrid"></div></section>
+
+    <section class="view" data-page="shop"><div class="page-intro"><p class="eyebrow">THE BOOKSHOP</p><h1>Keep independent stories alive.</h1><p>Thoughtfully selected books. Purchases support independent bookshops.</p></div><div class="disclosure">Preview shop · External Bookshop.org links are affiliate links and may earn us a commission at no extra cost to you.</div><div class="shop-feature"><img src="https://covers.openlibrary.org/b/isbn/9780593536550-L.jpg" alt="James by Percival Everett cover"><div><p class="eyebrow">EDITOR’S PICK</p><h2>James</h2><p class="author">Percival Everett</p><p>A brilliant, transforming reimagining of <em>Adventures of Huckleberry Finn</em>—harrowing and darkly humorous.</p><a class="pill dark-button" href="https://bookshop.org/search?keywords=James%20Percival%20Everett" target="_blank" rel="noopener noreferrer sponsored">Buy on Bookshop.org ↗</a></div></div></section>
+
+    <section class="view" data-page="clubs"><div class="page-intro"><p class="eyebrow">READ TOGETHER</p><h1>Clubs & reading lists</h1><p>Good books become better conversations.</p></div><div class="club-grid"><article class="club-card terracotta"><p class="eyebrow light">CURRENTLY READING</p><h2>The Long Table</h2><p>Literary fiction, one generous conversation each month.</p><div class="member-row"><span>AK</span><span>JM</span><span>MS</span><strong>+148 readers</strong></div><button class="pill light-button" data-join-club="long-table" aria-pressed="false">Join club</button></article><article class="club-card cream"><p class="eyebrow">READING LIST · 8 BOOKS</p><h2>Small Worlds,<br>Deep Roots</h2><p>Stories about place, belonging, and the landscapes that make us.</p><button class="quiet-button" data-save-list="small-worlds" aria-pressed="false">Save list</button></article></div></section>
+
+    <dialog id="bookDialog" aria-labelledby="dialogTitle"><button class="dialog-close" aria-label="Close book details">×</button><div class="dialog-content"><img id="dialogCover" alt=""><div><p class="eyebrow">BOOK DETAILS · PREVIEW DATA</p><h2 id="dialogTitle">Book details</h2><p id="dialogAuthor" class="author"></p><p id="dialogDescription"></p><label class="select-label">Reading status<select id="readingState"><option value="want">Want to Read</option><option value="current">Currently Reading</option><option value="finished">Finished</option><option value="dnf">Did Not Finish</option></select></label><div id="progressControl"><label for="progressRange">Reading progress <output id="progressOutput">0%</output></label><input id="progressRange" type="range" min="0" max="100" value="0"></div><fieldset><legend>Your rating</legend><div class="rating" id="ratingButtons"><button value="1" aria-label="Rate 1 star">★</button><button value="2" aria-label="Rate 2 stars">★</button><button value="3" aria-label="Rate 3 stars">★</button><button value="4" aria-label="Rate 4 stars">★</button><button value="5" aria-label="Rate 5 stars">★</button></div></fieldset></div></div></dialog>
+    <aside class="settings-panel" id="feedSettings" hidden><button class="dialog-close" id="closeSettings" aria-label="Close feed settings">×</button><p class="eyebrow">YOUR FEED</p><h2>Customize feed</h2><p>Choose what appears first. Saved only on this device.</p><label><input type="checkbox" data-feed-setting="friends" checked> Friends’ activity</label><label><input type="checkbox" data-feed-setting="highlights" checked> Reader highlights</label><label><input type="checkbox" data-feed-setting="shelf" checked> Your shelf</label></aside>
+  </main>
+
+  <nav class="mobile-nav" id="mobileNav" aria-label="Primary navigation"><button class="active" data-view="home">⌂<span>For you</span></button><button data-view="library">▤<span>Library</span></button><button data-view="discover">✦<span>Discover</span></button><button data-view="shop">◈<span>Shop</span></button><button data-view="clubs">◎<span>Clubs</span></button></nav>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <footer><p>Read With Me is an early product preview using demo data. Your changes stay in this browser.</p></footer>
+</body>
+</html>
